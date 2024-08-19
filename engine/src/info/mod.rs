@@ -1,8 +1,16 @@
+mod cse;
+mod severity;
+mod version;
+mod vpf;
+
+pub use crate::info::cse::CSE;
+pub use crate::info::severity::Severity;
+pub use crate::info::version::Version;
+pub use crate::info::vpf::VPF;
 use crate::serde_format::{is_default, string_vec_serde, Value};
-use fancy_regex::Captures;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-
+const UNKNOWN_00: &str = "00_unknown";
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 #[serde(deny_unknown_fields)]
@@ -84,14 +92,14 @@ impl Info {
           .replacen('/', "-", 10)
           .trim_start_matches('_')
           .trim_end_matches('_')
-          .to_string(),
+          .to_lowercase(),
         vendor: vendor
           .to_string()
           .replacen('\\', "", 10)
           .replacen('/', "-", 10)
           .trim_start_matches('_')
           .trim_end_matches('_')
-          .to_string(),
+          .to_lowercase(),
         framework: self.metadata.get("framework").map(|x| x.to_string()),
         verified: if let Some(Value::Bool(verified)) = self.metadata.get("verified") {
           *verified
@@ -112,119 +120,138 @@ impl Info {
       }
     })
   }
-}
-
-// nmap的服务版本信息
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-#[serde(deny_unknown_fields)]
-pub struct Version {
-  /// 产品名称
-  pub product_name: Option<String>,
-  /// 版本号
-  pub version: Option<String>,
-  /// 信息
-  pub info: Option<String>,
-  /// 主机名
-  pub hostname: Option<String>,
-  /// 操作系统
-  pub operating_system: Option<String>,
-  /// 设备类型
-  pub device_type: Option<String>,
-  /// 通用枚举
-  pub cpe: Vec<String>,
-}
-
-impl Version {
-  pub fn captures(&self, captures: Captures) -> BTreeMap<String, String> {
-    let replace = |x: &str| {
-      let mut x = x.to_string();
-      for (index, value) in self.extract_parameters(&x) {
-        if let Some(m) = captures.get(index) {
-          x = x.replace(&value, m.as_str());
-        }
-      }
-      x
+  pub fn get_cse(&self) -> Option<CSE> {
+    let mut flag = false;
+    let cse = CSE {
+      zoomeye_query: self
+        .metadata
+        .get("zoomeye-query")
+        .map(|x| {
+          flag = true;
+          x.to_vec()
+        })
+        .unwrap_or_default(),
+      fofa_query: self
+        .metadata
+        .get("fofa-query")
+        .map(|x| {
+          flag = true;
+          x.to_vec()
+        })
+        .unwrap_or_default(),
+      hunter_query: self
+        .metadata
+        .get("hunter-query")
+        .map(|x| {
+          flag = true;
+          x.to_vec()
+        })
+        .unwrap_or_default(),
+      shodan_query: self
+        .metadata
+        .get("shodan-query")
+        .map(|x| {
+          flag = true;
+          x.to_vec()
+        })
+        .unwrap_or_default(),
+      google_query: self
+        .metadata
+        .get("google-query")
+        .map(|x| {
+          flag = true;
+          x.to_vec()
+        })
+        .unwrap_or_default(),
     };
-    let mut r: BTreeMap<String, String> = BTreeMap::new();
-    if let Some(x) = &self.info {
-      r.insert("info".to_string(), replace(x));
+    if flag {
+      return Some(cse);
     }
-    if let Some(x) = &self.version {
-      r.insert("version".to_string(), replace(x));
+    None
+  }
+}
+
+impl Info {
+  pub fn set_vpf(&mut self, vpf: VPF) {
+    self.metadata.insert(
+      "verified".to_string(),
+      Value::Bool(vpf.vendor.as_str() != UNKNOWN_00),
+    );
+    self
+      .metadata
+      .insert("vendor".to_string(), Value::String(vpf.vendor));
+    self
+      .metadata
+      .insert("product".to_string(), Value::String(vpf.product));
+    if let Some(framework) = vpf.framework {
+      self
+        .metadata
+        .insert("framework".to_string(), Value::String(framework));
+    } else {
+      self.metadata.remove("framework");
     }
-    if let Some(x) = &self.device_type {
-      r.insert("device_type".to_string(), replace(x));
-    }
-    if let Some(x) = &self.product_name {
-      r.insert("product_name".to_string(), replace(x));
-    }
-    if let Some(x) = &self.hostname {
-      r.insert("hostname".to_string(), replace(x));
-    }
-    if let Some(x) = &self.operating_system {
-      r.insert("operating_system".to_string(), replace(x));
-    }
-    if !self.cpe.is_empty() {
-      r.insert(
-        "cpe".to_string(),
-        self
-          .cpe
-          .iter()
-          .map(|x| replace(x))
-          .collect::<Vec<_>>()
-          .join(","),
+  }
+  pub fn set_cse(&mut self, cse: CSE) {
+    if !cse.zoomeye_query.is_empty() {
+      self.metadata.insert(
+        "zoomeye-query".to_string(),
+        Value::List(
+          cse
+            .zoomeye_query
+            .iter()
+            .map(|x| Value::String(x.to_string()))
+            .collect(),
+        ),
       );
     }
-    r
-  }
-  fn extract_parameters(&self, s: &str) -> BTreeMap<usize, String> {
-    let mut parameters = BTreeMap::new();
-    let mut chars = s.chars().peekable();
-    while let Some(&c) = chars.peek() {
-      if c == '$' {
-        chars.next(); // 跳过 '$'
-        if let Some(&next_c) = chars.peek() {
-          let mut num_str = String::new();
-          // 下一位是数字
-          if next_c.is_ascii_digit() {
-            while let Some(&c) = chars.peek() {
-              if c.is_ascii_digit() {
-                num_str.push(c);
-                chars.next();
-              } else {
-                break;
-              }
-            }
-            let mut num = 0;
-            let mut multiplier = 1;
-            for digit in num_str.chars().rev() {
-              num += (digit as usize - '0' as usize) * multiplier;
-              multiplier *= 10;
-            }
-            parameters.insert(num, format!("${}", num));
-          }
-        }
-      }
-      chars.next();
+    if !cse.fofa_query.is_empty() {
+      self.metadata.insert(
+        "fofa-query".to_string(),
+        Value::List(
+          cse
+            .fofa_query
+            .iter()
+            .map(|x| Value::String(x.to_string()))
+            .collect(),
+        ),
+      );
     }
-    parameters
-  }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-#[serde(deny_unknown_fields)]
-pub struct VPF {
-  pub vendor: String,
-  pub product: String,
-  pub framework: Option<String>,
-  pub verified: bool,
-}
-
-impl VPF {
-  pub fn name(&self) -> String {
-    format!("{}:{}", self.vendor, self.product)
+    if !cse.hunter_query.is_empty() {
+      self.metadata.insert(
+        "hunter-query".to_string(),
+        Value::List(
+          cse
+            .hunter_query
+            .iter()
+            .map(|x| Value::String(x.to_string()))
+            .collect(),
+        ),
+      );
+    }
+    if !cse.shodan_query.is_empty() {
+      self.metadata.insert(
+        "shodan-query".to_string(),
+        Value::List(
+          cse
+            .shodan_query
+            .iter()
+            .map(|x| Value::String(x.to_string()))
+            .collect(),
+        ),
+      );
+    }
+    if !cse.google_query.is_empty() {
+      self.metadata.insert(
+        "google-query".to_string(),
+        Value::List(
+          cse
+            .google_query
+            .iter()
+            .map(|x| Value::String(x.to_string()))
+            .collect(),
+        ),
+      );
+    }
   }
 }
 
@@ -246,22 +273,4 @@ pub struct Classification {
   pub epss_percentile: Option<f32>,
   #[serde(default, skip_serializing_if = "is_default")]
   pub cpe: Option<String>,
-}
-
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Severity {
-  #[default]
-  // name:unknown
-  Unknown,
-  // name:info
-  Info,
-  // name:low
-  Low,
-  // name:medium
-  Medium,
-  // name:high
-  High,
-  // name:critical
-  Critical,
 }

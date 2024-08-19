@@ -2,7 +2,7 @@ use crate::serde_format::is_default;
 use serde::{Deserialize, Serialize};
 use slinger::http::header::HeaderValue;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub struct HttpOption {
   #[serde(default, skip_serializing_if = "is_default")]
@@ -46,21 +46,6 @@ pub struct HttpOption {
   pub read_all: bool,
 }
 
-impl Default for HttpOption {
-  fn default() -> Self {
-    Self {
-      host_redirects: false,
-      redirects: true,
-      race_count: None,
-      max_redirects: None,
-      threads: None,
-      max_size: None,
-      cookie_reuse: false,
-      read_all: false,
-    }
-  }
-}
-
 impl HttpOption {
   pub fn builder_client(&self) -> slinger::ClientBuilder {
     let redirect = if self.redirects {
@@ -73,6 +58,8 @@ impl HttpOption {
       slinger::redirect::Policy::None
     };
     slinger::ClientBuilder::new()
+      .danger_accept_invalid_certs(true)
+      .danger_accept_invalid_hostnames(true)
       .cookie_store(self.cookie_reuse)
       .redirect(redirect)
       .min_tls_version(Some(slinger::native_tls::Protocol::Tlsv10))
