@@ -1,3 +1,4 @@
+use crate::request::input_to_byte;
 use crate::serde_format::is_default;
 use crate::serde_format::Value;
 use serde::{Deserialize, Serialize};
@@ -29,7 +30,7 @@ pub struct Http {
   //   - name: Same Body for a Login POST request
   //     value: "\"username=test&password=test\""
   #[serde(default, skip_serializing_if = "is_default")]
-  pub body: slinger::Body,
+  pub body: Option<String>,
   // description: |
   //   Headers contains HTTP Headers to send with the request.
   // examples:
@@ -65,7 +66,8 @@ impl Http {
       for (key, value) in self.headers.clone().into_iter() {
         builder = builder.header(key, &value);
       }
-      if let Ok(request) = builder.body(self.body.clone()) {
+      let body = slinger::Body::from(input_to_byte(&self.body.clone().unwrap_or_default()));
+      if let Ok(request) = builder.body(body) {
         requests.push_back(Request::from(request));
       };
     }
