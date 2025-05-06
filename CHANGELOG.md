@@ -1,6 +1,33 @@
 # Change Log
 
 <!-- next-header -->
+## [2025.4.6] - 2025.4.6
+
+### Fixes
+
+- fix socks5 proxy tls
+
+## [2025.3.31] - 2025.3.31
+
+### Fixes
+
+- fix api-server async runtime
+
+## [2025.3.23] - 2025.3.23
+
+### Fixes
+
+- 更新[slinger](https://github.com/emo-crab/slinger)，把之前的线程池修改为异步
+- 添加`length`和`extractor`到csv表格
+- 修改`body`调试为十六进制字符串
+- 删除openssl依赖
+
+## [2025.3.3] - 2025.3.3
+
+### Fixes
+
+- 修复/path拼接
+- 优化slinger的原始字符串显示和比较
 
 ## [2025.2.20] - 2025.2.20
 

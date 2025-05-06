@@ -4,6 +4,7 @@ use crate::error::Error;
 use crate::matchers::FaviconMap;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use fancy_regex::Regex;
 use md5::{Digest, Md5};
 use mime::Mime;
 use slinger::http::header;
@@ -11,6 +12,8 @@ use slinger::http::header::HeaderMap;
 use slinger::{Body, ClientBuilder, Response};
 use std::collections::{BTreeMap, HashSet};
 use std::str::FromStr;
+use std::sync::OnceLock;
+
 #[derive(Debug, Clone)]
 pub struct HttpRecord {
   response: Response,
@@ -18,7 +21,7 @@ pub struct HttpRecord {
   favicon: BTreeMap<String, FaviconMap>,
   client_builder: ClientBuilder,
 }
-
+unsafe impl Send for HttpRecord {}
 impl HttpRecord {
   pub fn new(client_builder: ClientBuilder) -> Self {
     Self {
@@ -28,10 +31,10 @@ impl HttpRecord {
       client_builder,
     }
   }
-  fn fetch_favicon_hash(&mut self, url: &String) -> Option<FaviconMap> {
+  async fn fetch_favicon_hash(&mut self, url: &String) -> Option<FaviconMap> {
     self.skip.insert(url.to_string());
     let client = self.client_builder.clone().build().unwrap_or_default();
-    if let Ok(resp) = client.get(url).send().map_err(Error::Http) {
+    if let Ok(resp) = client.get(url).send().await.map_err(Error::Http) {
       if resp.status_code().as_u16() != 200
         || (if let Some(b) = resp.body() {
           !is_image(resp.headers(), b)
@@ -50,7 +53,7 @@ impl HttpRecord {
     }
     None
   }
-  pub fn find_favicon_tag(&mut self, response: &mut Response) {
+  pub async fn find_favicon_tag(&mut self, response: &mut Response) {
     // || self.response.status_code() > response.status_code()
     if self.response.uri() == "/" {
       self.response = response.clone();
@@ -62,7 +65,7 @@ impl HttpRecord {
         continue;
       }
       // 当图标404时，没有命中缓存，默认返回空字符串，需要判断一下
-      if let Some(hash) = self.fetch_favicon_hash(&link) {
+      if let Some(hash) = self.fetch_favicon_hash(&link).await {
         self.favicon.insert(link, hash);
       }
     }
@@ -143,8 +146,9 @@ fn is_image(headers: &HeaderMap, body: &Body) -> bool {
     ct
   }
 }
-
+static RE: OnceLock<Regex> = OnceLock::new();
 fn get_favicon_link(response: &Response) -> HashSet<String> {
+  let re = RE.get_or_init(|| Regex::new(r#"(?im)-\d{1,3}x\d{1,3}"#).expect("RE_COMPILE_ERROR"));
   let base_url = response.uri();
   let text = response.text().unwrap_or_default();
   let mut icon_links = HashSet::new();
@@ -164,6 +168,9 @@ fn get_favicon_link(response: &Response) -> HashSet<String> {
             .and_then(|x| x.and_then(|x| x.try_as_utf8_str()))
         });
         if let Some(path) = href {
+          if re.is_match(path).unwrap_or_default() {
+            continue;
+          }
           if path.starts_with("http://") || path.starts_with("https://") {
             icon_links.insert(path.to_string());
           } else {
